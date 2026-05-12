@@ -1,6 +1,5 @@
 import pdfplumber
 
-# ── Constants ──────────────────────────────────────────────────────────────────
 cap_alpha = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 weekdays  = ["monday", "tuesday", "wednesday", "thursday", "friday"]
 roman     = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI"}
@@ -17,8 +16,6 @@ time_table_template = [
     "17:00-17:55", "rooms",
 ]
 
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
 
 def year_isolation(pdf: pdfplumber.pdf.PDF, year: int) -> list:
     """
@@ -112,7 +109,6 @@ def process_weekdays(unprocessed_weekdays: list) -> dict:
             if not course:
                 continue
 
-            # "PH3234:Statistical Mechanics I" → code="PH3234", name="Statistical Mechanics I"
             parts = course.split(":", 1)
             code  = parts[0].strip()
             name  = parts[1].strip() if len(parts) > 1 else code
@@ -125,7 +121,7 @@ def process_weekdays(unprocessed_weekdays: list) -> dict:
     return courses
 
 
-# ── Entry point for standalone testing ────────────────────────────────────────
+# testing
 if __name__ == "__main__":
     import json
     from config import PDF_PATH, YEAR
