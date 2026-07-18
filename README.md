@@ -87,7 +87,7 @@ Done. 6 event(s) created, 0 course(s) skipped.
 
 Here's what the final result looks like — no need for painstaking entries.
 
-![alt text](exampleimage.png)
+![alt text](img/exampleimage.png)
 
 ## Footnotes
 
