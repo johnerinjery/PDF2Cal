@@ -7,9 +7,7 @@ SEMESTER_END   = date(2026, 12, 1)
 TIMEZONE = "Asia/Kolkata"
 
 MY_COURSES = [
-    "MT3254",
-    "MT3434",
-    "PH3224"
+    "PH3114", "PH3164", "PH3144", "PH3124", "PH3234", "PH3134"
 ]
 
 PDF_PATH = "schedule.pdf"

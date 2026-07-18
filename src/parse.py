@@ -1,33 +1,45 @@
 import pdfplumber
 
-cap_alpha = list("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-weekdays  = ["monday", "tuesday", "wednesday", "thursday", "friday"]
-roman     = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI"}
+weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+roman    = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V", 6: "VI"}
 
-time_table_template = [
-    "",
-    "9:00-9:55",   "rooms",
-    "10:00-10:55", "rooms",
-    "11:00-11:55", "rooms",
-    "12:00-12:55", "rooms",
-    "14:00-14:55", "rooms",
-    "15:00-15:55", "rooms",
-    "16:00-16:55", "rooms",
-    "17:00-17:55", "rooms",
+# Column layout of the new-format tables (26 columns wide, consistent across
+# the "Year I", "Year II" and "Year III & IV" blocks):
+#   col 0            -> day name
+#   cols 1-3         -> slot 1  (Course, Course Name, Room)
+#   cols 4-6         -> slot 2
+#   cols 7-9         -> slot 3
+#   cols 10-12       -> slot 4
+#   col 13           -> lunch-break marker column ("13:00"), no data
+#   cols 14-16       -> slot 5
+#   cols 17-19       -> slot 6
+#   cols 20-22       -> slot 7
+#   cols 23-25       -> slot 8
+# Each 3-wide slot is (course_code, course_name, room).
+
+COLUMN_SLOTS = [
+    (1,  "9:00-10:00"),
+    (4,  "10:00-11:00"),
+    (7,  "11:00-12:00"),
+    (10, "12:00-13:00"),
+    (14, "14:00-15:00"),
+    (17, "15:00-16:00"),
+    (20, "16:00-17:00"),
+    (23, "17:00-18:00"),
 ]
 
 
 def year_isolation(pdf: pdfplumber.pdf.PDF, year: int) -> list:
     """
     Extracts all table rows belonging to the given year from the PDF.
-    Scans for year title rows (e.g. 'II Year') as delimiters.
-    """
-    def search_for_year(label: str, rows: list):
-        for row in rows:
-            if (f := row[0]) is not None and "Year" in f:
-                if label in f.strip().split():
-                    return rows.index(row)
 
+    The new format labels sections "Year I", "Year II", "Year III & IV"
+    (3rd and 4th years share one combined section). A section header's
+    remainder (everything after "Year") is tokenized on whitespace/"&" to
+    get the roman numerals it covers, e.g. "III & IV" -> ["III", "IV"].
+    We isolate the block whose tokens contain the roman numeral for the
+    requested year.
+    """
     rows = [
         row
         for page in pdf.pages
@@ -36,40 +48,62 @@ def year_isolation(pdf: pdfplumber.pdf.PDF, year: int) -> list:
         for row in table
     ]
 
-    start_label = roman[year]
-    end_label   = roman[year + 1]
+    headers = []  # (row_index, [roman tokens])
+    for idx, row in enumerate(rows):
+        cell = row[0]
+        if cell and cell.strip().startswith("Year"):
+            remainder = cell.strip()[len("Year"):]
+            tokens = [t for t in remainder.replace("&", " ").split() if t]
+            headers.append((idx, tokens))
 
-    start_idx = search_for_year(start_label, rows)
-    end_idx   = search_for_year(end_label, rows)
+    target = roman.get(year)
+    start_idx = None
+    for i, (idx, tokens) in enumerate(headers):
+        if target in tokens:
+            start_idx = idx
+            end_idx = headers[i + 1][0] if i + 1 < len(headers) else len(rows)
+            break
 
-    # Edge case: back-to-back years on the same page share a title row
-    if start_idx == end_idx:
-        end_idx = search_for_year(roman[year + 2], rows)
+    if start_idx is None:
+        return []
 
     return rows[start_idx:end_idx]
 
 
 def collect_weekdays_unprocessed(year_schedule: list) -> list:
     """
-    Filters out header rows (group labels like A, B, C…) and keeps only
-    rows that represent actual course slots for a weekday.
-    Also drops the spurious 10th column that appears in some PDF exports.
+    Keeps only the real per-day data rows, dropping:
+      - the "Year X" / "Day" / column-header rows (day cell is empty)
+      - each day's group-letter row (e.g. "Monday | A | B | E | ...")
+
+    Each weekday's FIRST appearance in the section is its group-letter row
+    (this holds for both the single-data-row-per-day old-style block and the
+    multi-row-per-day new-style block, since a blank label/header row always
+    separates the group-letter row from the data rows that follow). Every
+    later row with that same day name is real course data.
     """
-    def mostly_true(lst):
-        return sum(lst) > len(lst) / 2
+    seen_days = set()
+    day_rows = []
 
-    day_unprocessed = []
     for row in year_schedule:
-        if row[0] is None:
+        cell = row[0]
+        if not cell:
             continue
-        if row[0].strip().lower() not in weekdays:
+        day = cell.strip().lower()
+        if day not in weekdays:
             continue
-        # Discard rows where the payload is mostly group-letter labels
-        if mostly_true([i in (cap_alpha + [""]) for i in row[1:]]):
-            continue
-        day_unprocessed.append(row[:9] + row[10:])  # drop column index 9
 
-    return day_unprocessed
+        if day not in seen_days:
+            seen_days.add(day)
+            continue  # this is the group-letter row, skip it
+
+        day_rows.append(row)
+
+    return day_rows
+
+
+def _clean(cell) -> str:
+    return (cell or "").replace("\n", " ").strip()
 
 
 def process_weekdays(unprocessed_weekdays: list) -> dict:
@@ -85,38 +119,52 @@ def process_weekdays(unprocessed_weekdays: list) -> dict:
             ...
         }
 
-    Each (day, time) pair in dayvector is one weekly class session.
-    If a course appears in multiple rooms (rare), the first room wins.
+    Handles two course-cell shapes seen in the new tables:
+      - normal: separate (code, name, room) columns
+      - cross-listed: "CODE1/CODE2" in the code column, registered under
+        each alt code so lookups by either code succeed
+      - merged multi-course cells (comma-separated "CODE:Name, CODE:Name"),
+        as still appear in some lab/tutorial blocks
     """
-    time_slots = time_table_template[1::2]  # every odd entry is a time string
     courses: dict = {}
 
-    for day_row in unprocessed_weekdays:
-        day_name = day_row[0].strip().lower()
+    def register(code, name, room, day_name, time_slot):
+        code = code.strip()
+        if not code:
+            return
+        if code not in courses:
+            courses[code] = {"dayvector": [], "room": room or "TBA", "name": name}
+        courses[code]["dayvector"].append((day_name, time_slot))
 
-        for slot_idx, time_slot in enumerate(time_slots):
-            course_idx = 2 * slot_idx + 1
-            room_idx   = course_idx + 1
+    for row in unprocessed_weekdays:
+        day_name = row[0].strip().lower()
 
-            course = day_row[course_idx] if course_idx < len(day_row) else None
-            room   = day_row[room_idx]   if room_idx   < len(day_row) else None
+        for start, time_slot in COLUMN_SLOTS:
+            if start >= len(row):
+                continue
+            # course codes never legitimately contain a newline; that shows
+            # up when pdfplumber splits a code across a line wrap
+            raw_code = (row[start] or "").replace("\n", "").strip()
+            name_cell = _clean(row[start + 1]) if start + 1 < len(row) else ""
+            room_cell = _clean(row[start + 2]) if start + 2 < len(row) else ""
 
-            if course:
-                course = course.replace("\n", " ").strip()
-            if room:
-                room = room.replace("\n", " ").strip()
-
-            if not course:
+            if not raw_code:
                 continue
 
-            parts = course.split(":", 1)
-            code  = parts[0].strip()
-            name  = parts[1].strip() if len(parts) > 1 else code
-
-            if code not in courses:
-                courses[code] = {"dayvector": [], "room": room, "name": name}
-
-            courses[code]["dayvector"].append((day_name, time_slot))
+            if "," in raw_code and ":" in raw_code:
+                # merged cell: "CODE1:Name1, CODE2:Name2, ..."
+                for piece in raw_code.split(","):
+                    piece = piece.strip()
+                    if ":" not in piece:
+                        continue
+                    code, name = piece.split(":", 1)
+                    register(code, name.strip(), room_cell, day_name, time_slot)
+            elif "/" in raw_code:
+                # cross-listed course, e.g. "BI3134/DS3114"
+                for alt_code in raw_code.split("/"):
+                    register(alt_code, name_cell, room_cell, day_name, time_slot)
+            else:
+                register(raw_code, name_cell, room_cell, day_name, time_slot)
 
     return courses
 
