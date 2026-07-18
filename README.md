@@ -83,6 +83,11 @@ Adding 'MA4123: Complex Analysis' | colorId=2 (2 session(s)/week)…
 Done. 6 event(s) created, 0 course(s) skipped.
 ```
 
+## Gallery
+
+Here's what the final result looks like — no need for painstaking entries.
+
+![alt text](exampleimage.png)
 
 ## Footnotes
 
